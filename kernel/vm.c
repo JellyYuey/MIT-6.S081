@@ -432,3 +432,67 @@ copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
     return -1;
   }
 }
+
+// simulate freewalk to print vm
+// 模拟 freewalk 函数来打印虚拟内存
+void printwalk(pagetable_t pagetable, int depth)
+{
+  // there are 2^9 = 512 PTEs in a page table.
+  // 在页表中有 2^9 = 512 个页表项 (PTE)
+  for(int i = 0; i < 512; i++){
+    pte_t pte = pagetable[i]; // 获取当前页表项
+    if(pte & PTE_V){ // 检查页表项是否有效
+      for (int j = 0; j < depth; j++){ // 根据深度打印缩进
+        printf("..");
+        if (j != depth - 1)
+          printf(" ");
+      }
+      // this PTE points to a lower-level page table.
+      // type cast
+      // 该页表项指向一个低级页表
+      // 类型转换
+      uint64 child = PTE2PA(pte); // 从页表项中提取物理地址
+      printf("%d: pte %p pa %p\n", i, (void*)pte, (void*)child); // 打印页表项信息
+
+      // 如果当前页表项不是叶子节点，递归打印子页表
+      if ((pte & (PTE_R|PTE_W|PTE_X)) == 0){
+        printwalk((pagetable_t)child, depth + 1);
+      }
+    }
+  }
+}
+
+// 打印页表
+void vmprint(pagetable_t pagetable){
+  // Use %p in your printf calls to print out full 64-bit hex PTEs and addresses as shown in the example.
+  // 使用 %p 打印 64 位十六进制的页表项和地址，如示例所示。
+  printf("page table %p\n", (void*)pagetable); // 打印页表地址
+  printwalk(pagetable, 1); // 调用 printwalk 函数打印页表项，初始深度为 1
+}
+
+
+// 检查给定页表和虚拟地址的访问权限
+int vm_pgaccess(pagetable_t pagetable, uint64 va){
+  pte_t *pte;  // 页表项指针
+
+  // 检查虚拟地址是否超出最大虚拟地址范围
+  if(va >= MAXVA)
+    return 0;
+
+  // 获取虚拟地址对应的页表项
+  pte = walk(pagetable, va, 0);
+  // 如果找不到对应的页表项，则返回 0
+  if(pte == 0){
+    return 0;
+  }
+
+  // 检查页表项中的访问标志 (PTE_A)
+  if((*pte & PTE_A) != 0){
+    // 清除访问标志 (第 6 位)
+    *pte = *pte & (~PTE_A); // 清除第 6 位标志 (PTE_A)
+    return 1; // 如果访问标志被设置过，返回 1
+  }
+
+  // 如果访问标志没有被设置过，返回 0
+  return 0;
+}

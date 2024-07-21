@@ -170,6 +170,9 @@ uint64          walkaddr(pagetable_t, uint64);
 int             copyout(pagetable_t, uint64, char *, uint64);
 int             copyin(pagetable_t, char *, uint64, uint64);
 int             copyinstr(pagetable_t, char *, uint64, uint64);
+void            printwalk(pagetable_t pagetable, int depth);
+void            vmprint(pagetable_t);   // <插入vmprint的函数签名>
+int             vm_pgaccess(pagetable_t pagetable, uint64 va);
 
 // plic.c
 void            plicinit(void);
