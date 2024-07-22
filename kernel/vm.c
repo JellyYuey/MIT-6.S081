@@ -297,35 +297,44 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
-int
-uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
+int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
-  pte_t *pte;
-  uint64 pa, i;
-  uint flags;
-  char *mem;
+    pte_t *pte; // 页表项指针
+    uint64 pa, i; // 物理地址和迭代变量
 
-  for(i = 0; i < sz; i += PGSIZE){
-    if((pte = walk(old, i, 0)) == 0)
-      panic("uvmcopy: pte should exist");
-    if((*pte & PTE_V) == 0)
-      panic("uvmcopy: page not present");
-    pa = PTE2PA(*pte);
-    flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
-      goto err;
+    // 遍历每一个页面
+    for(i = 0; i < sz; i += PGSIZE){
+        // 获取旧页表中虚拟地址 `i` 对应的页表项
+        if((pte = walk(old, i, 0)) == 0)
+            panic("uvmcopy: pte should exist");
+        
+        // 确保页表项有效
+        if((*pte & PTE_V) == 0)
+            panic("uvmcopy: page not present");
+        
+        // 提取物理地址
+        pa = PTE2PA(*pte);
+        
+        // 如果页表项可写，将其改为写时复制
+        if(*pte & PTE_W){
+            *pte = ((*pte) & (~PTE_W)) | PTE_COW;
+        }
+        
+        // 增加物理页面引用计数
+        k_incre_ref((void*)pa);
+        
+        // 在新页表中映射虚拟地址 `i` 到物理地址 `pa`
+        if(mappages(new, i, PGSIZE, pa, PTE_FLAGS(*pte)) != 0){
+            // 如果映射失败，释放物理页面并返回错误
+            kfree((void*)pa);
+            return -1;
+        }
     }
-  }
-  return 0;
-
- err:
-  uvmunmap(new, 0, i / PGSIZE, 1);
-  return -1;
+    
+    // 成功返回
+    return 0;
 }
+
 
 // mark a PTE invalid for user access.
 // used by exec for the user stack guard page.
@@ -343,27 +352,76 @@ uvmclear(pagetable_t pagetable, uint64 va)
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
 // Return 0 on success, -1 on error.
-int
-copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
-{
-  uint64 n, va0, pa0;
+int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
+  // 检查目标虚拟地址是否超过最大虚拟地址范围
+  if(dstva > MAXVA) {
+    return -1;
+  }
 
-  while(len > 0){
+  uint64 n, va0, pa0;
+  pte_t *pte;
+  char *mem;
+  uint flags;
+
+  // 逐页处理数据复制
+  while(len > 0) {
+    // 将目标虚拟地址向下对齐到页面边界
     va0 = PGROUNDDOWN(dstva);
+    // 查找目标虚拟地址对应的页表项
+    pte = walk(pagetable, va0, 0);
+    if(pte == 0)
+      return -1;
+    if((*pte & PTE_V) == 0)
+      return -1;
+    if((*pte & PTE_U) == 0)
+      return -1;
+
+    // 处理写时复制页面
+    if(*pte & PTE_COW) {
+      // 分配新的物理页面
+      if((mem = kalloc()) == 0) {
+        panic("copyout : can't kalloc");
+      } else {
+        // 获取原物理地址
+        pa0 = PTE2PA(*pte);
+        // 设置页表项为可写，并移除写时复制位
+        *pte = ((*pte) | PTE_W) & (~PTE_COW);
+        flags = PTE_FLAGS(*pte);
+        // 将原页面内容复制到新页面
+        memmove(mem, (char*)pa0, PGSIZE);
+        // 关键点：解除原页面映射，防止remmap panic
+        uvmunmap(pagetable, va0, 1, 1);
+        // 映射新的物理页面到虚拟地址
+        if(mappages(pagetable, va0, PGSIZE, (uint64)mem, flags) != 0) {
+          kfree(mem);
+          panic("copyout : can't map page");
+        }
+      }
+    } else {
+      // 获取原物理地址
+      pa0 = PTE2PA(*pte);
+    }
+
+    // 获取目标物理地址
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+
+    // 计算当前页需要复制的数据长度
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
+    // 将数据从源地址复制到目标物理地址
     memmove((void *)(pa0 + (dstva - va0)), src, n);
 
+    // 更新剩余数据长度和源地址、目标虚拟地址
     len -= n;
     src += n;
     dstva = va0 + PGSIZE;
   }
   return 0;
 }
+
 
 // Copy from user to kernel.
 // Copy len bytes to dst from virtual address srcva in a given page table.

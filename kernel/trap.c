@@ -65,9 +65,52 @@ usertrap(void)
     intr_on();
 
     syscall();
-  } else if((which_dev = devintr()) != 0){
+  } 
+  else if (r_scause() == 13 || r_scause() == 15) {
+    pte_t *pte; // 页表项指针
+    uint64 va, pa; // 虚拟地址和物理地址
+    uint flags; // 页表项标志
+    char *mem; // 新分配的物理页面
+
+    va = r_stval(); // 获取引发异常的虚拟地址
+
+    // 关键点：如果虚拟地址超出最大地址或溢出到保护页，则设置进程为已杀死
+    if (va >= MAXVA || (va <= PGROUNDDOWN(p->trapframe->sp) && va >= PGROUNDDOWN(p->trapframe->sp) - PGSIZE)) {
+        p->killed = 1;
+    } else {
+        va = PGROUNDDOWN(va); // 向下取整到页面大小
+        if ((pte = walk(p->pagetable, va, 0)) == 0) // 获取页表项
+            p->killed = 1;
+        else {
+            if ((*pte & PTE_COW) != 0) { // 检查是否是写时复制页面
+                if ((mem = kalloc()) == 0) { // 分配新的物理页面
+                    p->killed = 1;
+                } else {
+                    pa = PTE2PA(*pte); // 提取原物理地址
+                    *pte = ((*pte) | PTE_W) & (~PTE_COW); // 设置为可写，并移除写时复制位
+                    flags = PTE_FLAGS(*pte); // 获取页表项标志
+                    memmove(mem, (char *)pa, PGSIZE); // 将原页面内容复制到新页面
+
+                    // 关键点：解除原页面映射，防止remmap panic
+                    uvmunmap(p->pagetable, va, 1, 1);
+
+                    // 映射新的物理页面到虚拟地址
+                    if (mappages(p->pagetable, va, PGSIZE, (uint64)mem, flags) != 0) {
+                        uvmunmap(p->pagetable, va, 1, 1); // 映射失败则解除映射
+                        p->killed = 1;
+                    }
+                }
+            } else {
+                p->killed = 1; // 不是写时复制页面则设置进程为已杀死
+            }
+        }
+    }
+}
+
+  else if((which_dev = devintr()) != 0){
     // ok
-  } else {
+  } 
+  else {
     printf("usertrap(): unexpected scause %p pid=%d\n", r_scause(), p->pid);
     printf("            sepc=%p stval=%p\n", r_sepc(), r_stval());
     p->killed = 1;
