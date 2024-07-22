@@ -75,6 +75,16 @@ usertrap(void)
 
   if(p->killed)
     exit(-1);
+  // 如果中断设备为 2（即定时器中断）
+  if (which_dev == 2) {   // 定时器中断
+      // 增加已过去的时钟数
+      if (p->interval != 0 && ++p->passedticks == p->interval) {
+          // 如果过去的时钟数达到设定的间隔
+          p->passedticks = 0;  // 重置过去的时钟数
+          p->trapframe->epc = p->handler;   // 当返回用户空间时，执行信号处理程序
+      }
+  }
+
 
   // give up the CPU if this is a timer interrupt.
   if(which_dev == 2)

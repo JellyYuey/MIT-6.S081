@@ -315,6 +315,22 @@ w_tp(uint64 x)
   asm volatile("mv tp, %0" : : "r" (x));
 }
 
+// 读取当前帧指针 (frame pointer) 从 s0 寄存器 - lab4-2
+static inline uint64 r_fp() {
+  uint64 x;  // 用于存储从寄存器中读取的值
+
+  // 使用内联汇编 (inline assembly) 从 s0 寄存器中读取值
+  // 具体说明如下：
+  //  - "mv %0, s0" 是汇编指令，将 s0 寄存器的值移动到目标操作数中,%0 是一个占位符，它会被替换为 C 变量 x
+  //  - : "=r" (x) 表示将汇编指令的结果存储到 C 变量 x 中
+  //  - "r" 表示 x 是一个通用寄存器
+  asm volatile("mv %0, s0" : "=r" (x) );
+
+  // 返回从寄存器中读取的值
+  return x;
+}
+
+
 static inline uint64
 r_ra()
 {
