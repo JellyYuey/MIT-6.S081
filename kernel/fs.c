@@ -400,6 +400,43 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  // 处理二级索引
+  bn -= NINDIRECT; // 减去一级索引的数量，转换为二级索引的块号
+  if(bn < NDINDIRECT) { // 如果块号在二级索引范围内
+    // 加载二级索引块，如果没有则分配一个新的
+    addr = ip->addrs[NDIRECT + 1];
+    if(addr == 0) { // 如果二级索引块不存在
+        addr = balloc(ip->dev); // 分配一个新的块
+        ip->addrs[NDIRECT + 1] = addr; // 更新 inode 的二级索引块地址
+    }
+    // 读取二级索引块
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    
+    // 找到二级索引指向的第一个块，如果没有则分配
+    addr = a[bn / NINDIRECT]; // 计算二级索引的索引值
+    if(addr == 0) { // 如果二级索引指向的块不存在
+        addr = balloc(ip->dev); // 分配一个新的块
+        a[bn / NINDIRECT] = addr; // 更新二级索引指向的块地址
+        log_write(bp); // 将更新写入日志
+    }
+    brelse(bp); // 释放二级索引块
+
+    // 读取目标块
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    
+    // 找到目标块，如果没有则分配
+    addr = a[bn % NINDIRECT]; // 计算目标块在二级索引块中的位置
+    if(addr == 0) { // 如果目标块不存在
+        addr = balloc(ip->dev); // 分配一个新的块
+        a[bn % NINDIRECT] = addr; // 更新目标块地址
+        log_write(bp); // 将更新写入日志
+    }
+    brelse(bp); // 释放目标块
+    return addr; // 返回目标块地址
+  }
+
 
   panic("bmap: out of range");
 }
@@ -410,8 +447,8 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  struct buf *bp,*d_bp;
+  uint *a,*d_a;
 
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
@@ -430,6 +467,30 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  // 释放二级索引——仿照上部分释放代码，加层循环遍历即可
+    if(ip->addrs[NDIRECT+1]) {
+      bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+      a = (uint*)bp->data;
+      for(j = 0; j < NINDIRECT; j++) {
+        if(a[j]) {
+          // 第二级
+          d_bp = bread(ip->dev, a[j]);
+          d_a = (uint*)d_bp->data;
+          for(i = 0; i < NINDIRECT; i++) {
+            if(d_a[i]) {
+              bfree(ip->dev, d_a[i]);
+            }
+          }
+          brelse(d_bp);
+          bfree(ip->dev, a[j]);
+          a[j] = 0;
+        }
+      }
+      brelse(bp);
+      bfree(ip->dev, ip->addrs[NDIRECT+1]);
+      ip->addrs[NDIRECT] = 0;
   }
 
   ip->size = 0;
