@@ -80,7 +80,8 @@ usertrap(void)
       // 增加已过去的时钟数
       if (p->interval != 0 && ++p->passedticks == p->interval) {
           // 如果过去的时钟数达到设定的间隔
-          p->passedticks = 0;  // 重置过去的时钟数
+          p->trapframecopy = p->trapframe + 512;  
+          memmove(p->trapframecopy,p->trapframe,sizeof(struct trapframe));    // copy trapframe
           p->trapframe->epc = p->handler;   // 当返回用户空间时，执行信号处理程序
       }
   }
